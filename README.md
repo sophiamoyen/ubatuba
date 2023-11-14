@@ -3,7 +3,7 @@ Dieses Repository enthält den Demo-Code zum Projektseminar "Wettbewerb künstli
 
 ## Erste Schritte
 
-1. Klone/Kopiere dieses Repository
+1. Klone/Kopiere dieses Repositor
 2. Richte ein eigenes privates Repository auf github/gitlab ein. Darüber könnt ihr später die Abgaben eurer Modelle machen. 
 3. Füge unseren Account als Collaborator hinzu (Github: Name="wettbewerbKI", Gitlab: auf Anfrage)
 3. Lege ein Python Environment an. Am Besten funktioniert das mit [Anaconda](https://www.anaconda.com/products/distribution), und `conda create -n wki-ws23 python=3.8`
