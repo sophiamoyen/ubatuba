@@ -18,11 +18,16 @@ from wettbewerb import get_3montages
 import mne
 from scipy import signal as sig
 import ruptures as rpt
+import pywt
+from sklearn.model_selection import KFold
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+import joblib
 
 
 
 ###Signatur der Methode (Parameter und Anzahl return-Werte) darf nicht verändert werden
-def predict_labels(channels : List[str], data : np.ndarray, fs : float, reference_system: str, model_name : str='model.json') -> Dict[str,Any]:
+def predict_labels(channels : List[str], data : np.ndarray, fs : float, reference_system: str, model_name : str='model.joblib') -> Dict[str,Any]:
     '''
     Parameters
     ----------
@@ -49,88 +54,32 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
     # Initialisiere Return (Ergebnisse)
     seizure_present = True # gibt an ob ein Anfall vorliegt
     seizure_confidence = 0.5 # gibt die Unsicherheit des Modells an (optional)
-    onset = 4.2   # gibt den Beginn des Anfalls an (in Sekunden)
+    onset = 4.5   # gibt den Beginn des Anfalls an (in Sekunden)
     onset_confidence = 0.99 # gibt die Unsicherheit bezüglich des Beginns an (optional)
     offset = 999999  # gibt das Ende des Anfalls an (optional)
     offset_confidence = 0   # gibt die Unsicherheit bezüglich des Endes an (optional)
-
+    '''
     # Hier könnt ihr euer vortrainiertes Modell laden (Kann auch aus verschiedenen Dateien bestehen)
     with open(model_name, 'rb') as f:  
         parameters = json.load(f)         # Lade simples Model (1 Parameter)
-        th_opt = parameters['std_thresh']
-
+    '''
+    rf_classifier = joblib.load(model_name)
     
-    # Wende Beispielcode aus Vorlesung an 
+    wavelet = 'db4'
+    montage, montage_data, is_missing = get_3montages(channels, data)
+    montage_line_length_array = np.zeros((15))
+    for j, signal_name in enumerate(montage):
+        ca4, cd4, cd3, cd2, cd1 = pywt.wavedec(montage_data[j], wavelet, level=4)
+        montage_line_length_array[(5*j)] = np.sum(np.abs(np.diff(ca4)))/len(ca4)
+        montage_line_length_array[(5*j)+1] = np.sum(np.abs(np.diff(cd4)))/len(cd4)
+        montage_line_length_array[(5*j)+2] = np.sum(np.abs(np.diff(cd3)))/len(cd3)
+        montage_line_length_array[(5*j)+3] = np.sum(np.abs(np.diff(cd2)))/len(cd2)
+        montage_line_length_array[(5*j)+4] = np.sum(np.abs(np.diff(cd1)))/len(cd1)
+    dataset_montage_line_length_array = np.array([montage_line_length_array])
     
-    _montage, _montage_data, _is_missing = get_3montages(channels, data)
-    signal_std = np.zeros(len(_montage))
-    for j, signal_name in enumerate(_montage):
-        # Ziehe erste Montage des EEG
-        signal = _montage_data[j]
-        # Wende Notch-Filter an um Netzfrequenz zu dämpfen
-        signal_notch = mne.filter.notch_filter(x=signal, Fs=fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
-        # Wende Bandpassfilter zwischen 0.5Hz und 70Hz um Rauschen aus dem Signal zu filtern
-        signal_filter = mne.filter.filter_data(data=signal_notch, sfreq=fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
-        
-        # Berechne short time fourier transformation des Signal: signal_filtered = filtered signal of channel, fs = sampling frequency, nperseg = length of each segment
-        # Output f= array of sample frequencies, t = array of segment times, Zxx = STFT of signal
-        f, t, Zxx = sig.stft(signal_filter, fs, nperseg=fs * 3)
-        # Berechne Schrittweite der Frequenz
-        df = f[1] - f[0]
-        # Berechne Engergie (Betrag) basierend auf Real- und Imaginärteil der STFT
-        E_Zxx = np.sum(Zxx.real ** 2 + Zxx.imag ** 2, axis=0) * df
-        
-        signal_std[j] = np.std(signal_filter)
+    seizure_present = rf_classifier.predict(dataset_montage_line_length_array)
+    seizure_present = seizure_present[0]
 
-
-
-        # Erstelle neues Array in der ersten Iteration pro Patient
-        if j == 0:
-            # Initilisiere Array mit Energiesignal des ersten Kanals
-            E_array = np.array(E_Zxx)
-        else:
-            # Füge neues Energiesignal zu vorhandenen Kanälen hinzu (stack it)
-            E_array = np.vstack((E_array, np.array(E_Zxx)))
-            
-    # Berechne Feature zur Seizure Detektion
-    signal_std_max = signal_std.max()
-    # Klassifiziere Signal
-    seizure_present = signal_std_max>th_opt
-    
-    # Berechne Gesamtenergie aller Kanäle für jeden Zeitppunkt
-    E_total = np.sum(E_array, axis=0)
-    # Berechne Stelle der maximalen Energie
-    max_index = E_total.argmax()
-
-    # Berechne "changepoints" der Gesamtenergie
-    # Falls Maximum am Anfang des Signals ist muss der Onset ebenfalls am Anfang sein und wir können keinen "changepoint" berechnen
-    if max_index == 0:
-        onset = 0.0
-        onset_confidence = 0.2
-        
-    else:
-        # Berechne "changepoint" mit dem ruptures package
-        # Setup für  "linearly penalized segmentation method" zur Detektion von changepoints im Signal mi rbf cost function
-        algo = rpt.Pelt(model="rbf").fit(E_total)
-        # Berechne sortierte Liste der changepoints, pen = penalty value
-        result = algo.predict(pen=10)
-        #Indices sind ums 1 geshiftet
-        result1 = np.asarray(result) - 1
-        # Selektiere changepoints vor Maximum
-        result_red = result1[result1 < max_index]
-        # Falls es mindestens einen changepoint gibt nehmen wir den nächsten zum Maximum
-        if len(result_red)<1:
-            # Falls keine changepoint gefunden wurde raten wir, dass er "nahe" am Maximum ist
-            print('No changepoint, taking maximum')
-            onset_index = max_index
-        else:
-            # Der changepoint entspricht gerade dem Onset 
-            onset_index = result_red[-1]
-        # Gebe Onset zurück
-        onset = t[onset_index]      
-     
-     
-    
 #------------------------------------------------------------------------------  
     prediction = {"seizure_present":seizure_present,"seizure_confidence":seizure_confidence,
                    "onset":onset,"onset_confidence":onset_confidence,"offset":offset,
