@@ -20,10 +20,13 @@ from scipy import signal as sig
 import ruptures as rpt
 import pywt
 from sklearn.model_selection import KFold
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 import joblib
 
+from train import selector
+from scipy.stats import kurtosis, skew
+import antropy as ant
+from sklearn.ensemble import GradientBoostingClassifier
 
 
 ###Signatur der Methode (Parameter und Anzahl return-Werte) darf nicht verändert werden
@@ -63,22 +66,39 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
     with open(model_name, 'rb') as f:  
         parameters = json.load(f)         # Lade simples Model (1 Parameter)
     '''
-    rf_classifier = joblib.load(model_name)
+    clf = joblib.load(model_name)
     
-    wavelet = 'db4'
-    montage, montage_data, is_missing = get_3montages(channels, data)
-    montage_line_length_array = np.zeros((15))
-    for j, signal_name in enumerate(montage):
-        ca4, cd4, cd3, cd2, cd1 = pywt.wavedec(montage_data[j], wavelet, level=4)
-        montage_line_length_array[(5*j)] = np.sum(np.abs(np.diff(ca4)))/len(ca4)
-        montage_line_length_array[(5*j)+1] = np.sum(np.abs(np.diff(cd4)))/len(cd4)
-        montage_line_length_array[(5*j)+2] = np.sum(np.abs(np.diff(cd3)))/len(cd3)
-        montage_line_length_array[(5*j)+3] = np.sum(np.abs(np.diff(cd2)))/len(cd2)
-        montage_line_length_array[(5*j)+4] = np.sum(np.abs(np.diff(cd1)))/len(cd1)
-    dataset_montage_line_length_array = np.array([montage_line_length_array])
+     # Berechne Montage
+    _montage, _montage_data, _is_missing = get_3montages(channels, data)
+    id_feature = np.zeros(27)
+        
+    m = 0
+    for j, signal_name in enumerate(_montage):
+        # Ziehe erste Montage des EEG
+        signal = _montage_data[j]
+        # Notch-Filter to compensate net frequency of 50 Hz
+        signal_notch = mne.filter.notch_filter(x=signal, Fs=fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
+        # Bandpassfilter between 0.5Hz and 70Hz to filter out noise
+        signal_filter = mne.filter.filter_data(data=signal_notch, sfreq=fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
+        
+        """Feature calculation"""
+        sig_min = np.min(signal_filter) # Min
+        sig_max = np.max(signal_filter) # Max
+        sig_mean = np.mean(signal_filter) # Mean
+        sig_ll = np.sum(np.abs(np.diff(signal_filter))) # Line Length
+        sig_std = np.std(signal_filter) #Std Dev
+        sig_kurtosis = kurtosis(signal_filter.tolist()) #Kurtosis
+        sig_skew = skew(signal_filter.tolist()) #Skewness
+        sig_en = np.mean(signal_filter**2) #Energy 
+        sig_entspec = ant.spectral_entropy(signal_filter,fs,method='fft') # Entropy Spectral
+        
+        id_feature[m:(m+9)] = np.array([sig_min, sig_max, sig_mean, sig_ll, sig_std, sig_kurtosis, sig_skew, sig_en, sig_entspec])
+        m += 9
     
-    seizure_present = rf_classifier.predict(dataset_montage_line_length_array)
-    seizure_present = seizure_present[0]
+    id_feature = id_feature.reshape(1,-1)
+    X_selected = selector.transform(id_feature)
+    
+    seizure_present = clf.predict(X_selected)
 
 #------------------------------------------------------------------------------  
     prediction = {"seizure_present":seizure_present,"seizure_confidence":seizure_confidence,
@@ -86,6 +106,3 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
                    "offset_confidence":offset_confidence}
   
     return prediction # Dictionary mit prediction - Muss unverändert bleiben!
-                               
-                               
-        
