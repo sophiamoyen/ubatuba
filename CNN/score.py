@@ -6,7 +6,7 @@ import argparse
 from typing import Tuple,List, Dict, Union
 
 
-def score(test_dir : str='../test/') -> Dict[str, Union[float, List[int]]]:
+def score(test_dir : str='../../test/') -> Dict[str, Union[float, List[int]]]:
     """
     Berechnet relevante Metriken des Wettbewerbs, sowie weitere Metriken
     Parameters
@@ -208,7 +208,7 @@ def compute_interval_scores(gt_present:np.ndarray,pred_present:np.ndarray,gt_ons
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description='Predict given Model')
-    parser.add_argument('--test_dir', action='store',type=str,default='../test/')
+    parser.add_argument('--test_dir', action='store',type=str,default='../../test/')
     args = parser.parse_args()
     metrics = score(args.test_dir)
     performance_metric = metrics["performance_metric_WS23"]

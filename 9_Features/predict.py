@@ -27,7 +27,10 @@ import joblib
 from train import selector
 from scipy.stats import kurtosis, skew
 import antropy as ant
+
+# Model libraries
 from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.svm import SVC
 
 
 ###Signatur der Methode (Parameter und Anzahl return-Werte) darf nicht verändert werden
@@ -100,6 +103,7 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
     X_selected = selector.transform(id_feature)
     
     seizure_present = clf.predict(X_selected)
+    print(seizure_present)
 
 #------------------------------------------------------------------------------  
     prediction = {"seizure_present":seizure_present,"seizure_confidence":seizure_confidence,

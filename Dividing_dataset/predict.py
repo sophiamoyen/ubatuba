@@ -52,7 +52,7 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
 # Euer Code ab hier  
 
     # Initialisiere Return (Ergebnisse)
-    seizure_present = False # gibt an ob ein Anfall vorliegt
+    seizure_present = [0] # gibt an ob ein Anfall vorliegt
     seizure_confidence = 0.5 # gibt die Unsicherheit des Modells an (optional)
     onset = 4.5   # gibt den Beginn des Anfalls an (in Sekunden)
     onset_confidence = 0.99 # gibt die Unsicherheit bezüglich des Beginns an (optional)
@@ -65,29 +65,39 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
     '''
     rf_classifier = joblib.load(model_name)
     
-    N_div = 100 # Numeber of subdivisions
+    N_div = 50 # Numeber of subdivisions
     # Decompose the wave
     wavelet = 'db4'
-    dataset_montage_line_length_array = np.zeros((N_div,15))
+    features = np.zeros((N_div,15))
     montage, montage_data, is_missing = get_3montages(channels, data)
-    montage_line_length_array = np.zeros((15))
-    for y in range(N_div):
-        for j, signal_name in enumerate(montage):
-            montage_divided = np.array_split(montage_data[j],N_div)
+    montage1_array = np.zeros((N_div,5))
+    montage2_array = np.zeros((N_div,5))
+    montage3_array = np.zeros((N_div,5))
+    montage_array = [montage1_array,montage2_array,montage3_array]
+    for j, signal_name in enumerate(montage):
+        montage_divided = np.array_split(montage_data[j],N_div)
+        for y in range(N_div):
             ca4, cd4, cd3, cd2, cd1 = pywt.wavedec(montage_divided[y], wavelet, level=4)
             dwt_array = [ca4, cd4, cd3, cd2, cd1]
             for w in range(len(dwt_array)):
-                montage_line_length_array[(5*j)+w] = np.sum(np.abs(np.diff(dwt_array[w])))/len(dwt_array[w])                
-        dataset_montage_line_length_array[y*N_div:y*N_div+15] = montage_line_length_array
-
-    features = dataset_montage_line_length_array
-    seizure_present_array = np.zeros(len(features))
+                montage_array[j][y][w] = np.sum(np.abs(np.diff(dwt_array[w])))/len(dwt_array[w])  
+    for k in range(N_div):
+        features[k][0:5] = montage_array[0][k]
+        features[k][5:10] = montage_array[1][k]
+        features[k][10:15] = montage_array[2][k]
+        
+    
+    seizure_present_array = np.zeros(len(features),dtype=bool)
     for f in range(len(features)):
-        seizure_present_array[f] = rf_classifier.predict(features[f])
+        seizure_present_array[f] = rf_classifier.predict(features[f].reshape(1, -1))
+        #print(features[f])
+        #print(seizure_present_array[f])
     
     for s in range(len(seizure_present_array)):
+        #print(seizure_present_array[s])
         if seizure_present_array[s] == 1:
-            seizure_present == True
+            print("Epilepsia detectada")
+            seizure_present = [1]
     
 
 #------------------------------------------------------------------------------  

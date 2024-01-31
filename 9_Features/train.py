@@ -13,19 +13,23 @@ import ruptures as rpt
 import json
 import pywt
 from sklearn.model_selection import KFold
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 import joblib
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_curve, auc
 import pandas as pd
 from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from imblearn.over_sampling import SMOTE
+
+# Import Model libraries
 from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
 
 
 ### if __name__ == '__main__':  # bei multiprocessing auf Windows notwendig
 
-training_folder  = "../../shared_data/training_mini"
+training_folder  = "../../training"
 
 print('Loading Dataset')
 ids, channels, data, sampling_frequencies, reference_systems, eeg_labels = load_references(training_folder) # Importiere EEG-Dateien, zugehörige Kanalbenennung, Sampling-Frequenz (Hz) und Name (meist fs=256 Hz), sowie Referenzsystem
@@ -74,8 +78,8 @@ column_values = ['a_min','a_max','a_mean','a_ll','a_std','a_kurt','a_skew','a_en
                  'b_min','b_max','b_mean','b_ll','b_std','b_kurt','b_skew','b_energy','b_ent',
                  'c_min','c_max','c_mean','c_ll','c_std','c_kurt','c_skew','c_energy','c_ent']
 df_features = pd.DataFrame(data = feature,
-                  index = ids,
-                  columns = column_values)
+                          index = ids,
+                          columns = column_values)
 
 
 # select top 10 features using mutual_info_classif
@@ -87,7 +91,12 @@ mutual_info = pd.Series(mutual_info)
 mutual_info.index = df_features.columns
 print(mutual_info.sort_values(ascending=False))
 
+# fix class imbalance issue with SMOTE
+smote = SMOTE()
+X_selected, labels = smote.fit_resample(X_selected, labels)
+
 """
+# RANDOM FOREST
 clf = rf = RandomForestClassifier(
     n_estimators=100,  # Number of trees in the forest
     max_features="sqrt",  # Number of features to consider at each split
@@ -95,10 +104,14 @@ clf = rf = RandomForestClassifier(
     min_samples_leaf=4,  # Minimum number of samples required to be at a leaf node
 )
 
-
-clf.fit(X_selected, labels)
 """
+# XGBOOST
 clf = GradientBoostingClassifier(n_estimators=100, learning_rate=1.0, max_depth=1, random_state=0)
+
+"""
+# SVM
+clf = SVC(class_weight='balanced', probability=True)
+"""
 clf.fit(X_selected, labels)
 
 # Speichere Modell

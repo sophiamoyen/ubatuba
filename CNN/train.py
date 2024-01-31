@@ -18,7 +18,7 @@ import json
 
 ### if __name__ == '__main__':  # bei multiprocessing auf Windows notwendig
 
-training_folder  = "../shared_data/training_mini"
+training_folder  = "../../shared_data/training_mini"
 
 
 ids, channels, data, sampling_frequencies, reference_systems, eeg_labels = load_references(training_folder) # Importiere EEG-Dateien, zugehörige Kanalbenennung, Sampling-Frequenz (Hz) und Name (meist fs=256 Hz), sowie Referenzsystem
