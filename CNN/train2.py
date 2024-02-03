@@ -40,7 +40,7 @@ Loading Dataset
 """
 
 # Daten laden und vorbereiten
-training_folder  = "../test_5"
+training_folder  = "../test_1"
 ids, channels, data, sampling_frequencies, reference_systems, eeg_labels = load_references(training_folder)
 
 """
@@ -144,9 +144,11 @@ with seizure), we are doing an Undersampling
 
 -----------------------------------------------------------------
 """
-"""
-# Instanziierung von RandomUnderSampler
-undersample = RandomUnderSampler()
+
+# Verhältnis festlegen
+sampling_strategy = 0.2
+
+undersample = RandomUnderSampler(sampling_strategy=sampling_strategy)
 
 # Erstellen einer Funktion, die das Resampling durchführt
 def resample_signal(signal, labels):
@@ -159,20 +161,19 @@ mont1_signal_resampled, labels_resampled_1 = resample_signal(np.array(mont1_sign
 mont2_signal_resampled, labels_resampled_2 = resample_signal(np.array(mont2_signal), labels)
 mont3_signal_resampled, labels_resampled_3 = resample_signal(np.array(mont3_signal), labels)
 
-# Sicherstellen, dass die Labels für alle Signale gleich sind, da sie das gleiche Set von Beispielen repräsentieren sollten
+# Sicherstellen, dass die Labels für alle Signale gleich sind
 assert np.array_equal(labels_resampled_1, labels_resampled_2)
 assert np.array_equal(labels_resampled_1, labels_resampled_3)
 
 labels_resampled = labels_resampled_1
-
-whole_mont_resampled = [mont1_signal_resampled,mont2_signal_resampled,mont3_signal_resampled]
-
-
+whole_mont_resampled = [mont1_signal_resampled, mont2_signal_resampled, mont3_signal_resampled]
 whole_mont_resampled_np = np.array(whole_mont_resampled)
+
 """
 
 labels_resampled = labels
 whole_mont_resampled_np = np.array(whole_mont)
+"""
 
 """
 ---------------------------------------------------------------------

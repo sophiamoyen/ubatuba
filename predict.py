@@ -129,12 +129,12 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
     # Konvertieren der Daten in PyTorch Tensoren und Vorbereiten für das Modell
     data_tensor = torch.tensor(whole_mont_resampled_np, dtype=torch.float).permute(1, 0, 2)  # Permutieren zu [Anzahl der Beispiele, Kanäle, Länge]
 
-    # Stellen Sie sicher, dass Ihr Modell und Daten auf dem gleichen Gerät sind
+    # Sicherstellen, dass das Modell und Daten auf dem gleichen Gerät sind
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cnn_classifier = cnn_classifier.to(device)
     data_tensor = data_tensor.to(device)
 
-    # Bereiten Sie die Struktur für die Erfassung der Vorhersagen vor
+    # Vorbereiten der Struktur für die Erfassung der Vorhersagen
     seizure_present_array = np.zeros(data_tensor.shape[0], dtype=bool)
 
     # Vorhersagen durchführen und überprüfen, ob ein Anfall vorhanden ist
@@ -142,7 +142,7 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
         predictions_classifier = cnn_classifier(data_tensor)  # Vorhersagen für das gesamte Batch
         predicted_classes = torch.argmax(predictions_classifier, dim=1)
         
-        seizure_indices = torch.where(predicted_classes == 1)[0]  # Angenommen, Klasse 1 steht für "seizure"
+        seizure_indices = torch.where(predicted_classes == 1)[0]  # Klasse 1 steht für "seizure"
 
         # Aktualisieren des seizure_present_array basierend auf den gefundenen Anfall-Indizes
         seizure_present_array[seizure_indices] = True
@@ -159,9 +159,9 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
             # Berechnung des Anfallsendes in Sekunden
             offset = N_samples * last_seizure_index / fs
 
-            # Annahme: Confidence-Werte sind statisch, könnten dynamisch angepasst werden
-            seizure_confidence = 0.8  # Beispielwert, anpassen basierend auf Ihrer Modellausgabe oder Heuristik
-            offset_confidence = 0.8  # Beispielwert, anpassen basierend auf Analyse
+            # Annahme: Confidence-Werte sind statisch
+            seizure_confidence = 0.8  
+            offset_confidence = 0.8  
         else:
             # Falls kein Anfall vorhergesagt wurde, setzen Sie Standardwerte
             seizure_present = [0]
