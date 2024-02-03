@@ -9,3 +9,4 @@ joblib>=1.2
 PyWavelets>=1.2.0
 scikit-learn>=1.0.1
 antropy>=0.1.6
+torch>=1.11.0

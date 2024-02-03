@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 
 
-
 import csv
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-from wettbewerb import load_references, get_3montages
 import mne
 from scipy import signal as sig
 import ruptures as rpt
@@ -16,76 +14,76 @@ from sklearn.model_selection import KFold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 import joblib
-from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_curve, auc
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from wettbewerb import load_references, get_3montages, get_6montages
+from sklearn.ensemble import RandomForestClassifier
 from imblearn.over_sampling import SMOTE
-from sklearn.ensemble import GradientBoostingClassifier
+from imblearn.under_sampling import RandomUnderSampler
 
-from scipy.stats import kurtosis, skew
-import antropy as ant
+import tensorflow as tf
+import keras
+from keras.layers import Dense, Flatten
+from keras.layers import Conv2D, MaxPooling2D
+from keras.models import Sequential
+from keras.callbacks import History 
+history = History()
+ 
+from tensorflow.compat.v1 import ConfigProto
+from tensorflow.compat.v1 import InteractiveSession
+
+
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
 
 
 ### if __name__ == '__main__':  # bei multiprocessing auf Windows notwendig
 
-training_folder  = "../../shared_data/training_mini/"
+training_folder  = "../../test_2"
 
 print('Loading Dataset')
 ids, channels, data, sampling_frequencies, reference_systems, eeg_labels = load_references(training_folder) # Importiere EEG-Dateien, zugehörige Kanalbenennung, Sampling-Frequenz (Hz) und Name (meist fs=256 Hz), sowie Referenzsystem
 print('Dataset loaded')
 
-N_samples = 4000 # Numeber of samples per division
+number_montages = 3
+N_samples = 3000 # Number of samples per division
 # Decompose the wave
 wavelet = 'db4'
 scaler = StandardScaler()
-normalization = True
-features = []
+new_signal = []
 
+mont1_signal = []
+mont2_signal = []
+mont3_signal = []
+whole_mont = [mont1_signal,mont2_signal,mont3_signal]
 for i,_id in enumerate(ids):
-    montage, montage_data, is_missing = get_3montages(channels[i], data[i])
-    _fs = sampling_frequencies[i]
-    N_div = len(montage_data[0])//N_samples
-    print(N_div)
     
-    # Notch Filter
-    montage_data[0] = mne.filter.notch_filter(x=montage_data[0], Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
-    montage_data[1] = mne.filter.notch_filter(x=montage_data[1], Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
-    montage_data[2] = mne.filter.notch_filter(x=montage_data[2], Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
-    # Noise Filter
-    montage_data[0] = mne.filter.filter_data(data=montage_data[0], sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
-    montage_data[1] = mne.filter.filter_data(data=montage_data[1], sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
-    montage_data[2] = mne.filter.filter_data(data=montage_data[0], sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
-    
-    if normalization:
-    # Normalizing data
-        norm_montage0_data = scaler.fit_transform(montage_data[0].reshape(-1,1)).reshape(1,-1)[0]
-        norm_montage1_data = scaler.fit_transform(montage_data[1].reshape(-1,1)).reshape(1,-1)[0]
-        norm_montage2_data = scaler.fit_transform(montage_data[2].reshape(-1,1)).reshape(1,-1)[0]
+    if number_montages == 6:
+        _montage, _montage_data, _is_missing = get_6montages(channels[i], data[i])
     else:
-        norm_montage0_data = montage_data[0]
-        norm_montage1_data = montage_data[1]
-        norm_montage2_data = montage_data[2]
+        _montage, _montage_data, _is_missing = get_3montages(channels[i], data[i])
         
-    new_montages = [norm_montage0_data, norm_montage1_data, norm_montage1_data]
-    for i in range(N_div):
-        features_per_div = np.zeros((27))
-        m = 0
-        for signal_filter in new_montages:
-            sig_min = np.min(signal_filter) # Min
-            sig_max = np.max(signal_filter) # Max
-            sig_mean = np.mean(signal_filter) # Mean
-            sig_ll = np.sum(np.abs(np.diff(signal_filter))) # Line Length
-            sig_std = np.std(signal_filter) #Std Dev
-            sig_kurtosis = kurtosis(signal_filter.tolist()) #Kurtosis
-            sig_skew = skew(signal_filter.tolist()) #Skewness
-            sig_en = np.mean(signal_filter**2) #Energy
-            sig_entspec = ant.spectral_entropy(signal_filter,_fs,method='fft') # Entropy Spectral
-            
-            features_per_div[m:(m+9)] = np.array([sig_min, sig_max, sig_mean, sig_ll, sig_std, sig_kurtosis, sig_skew, sig_en,sig_entspec])
-            m += 9
-        features.append(features_per_div)
+    _fs = sampling_frequencies[i]
+    features_per_id = []
+
+    for j, signal_name in enumerate(_montage):
+        signal = _montage_data[j]
+        # Notch-Filter to compensate net frequency of 50 Hz
+        signal_notch = mne.filter.notch_filter(x=signal, Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
+        # Bandpassfilter between 0.5Hz and 70Hz to filter out noise
+        signal_filter = mne.filter.filter_data(data=signal_notch, sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
+        # Defining number of divisions for signal
+        N_div = len(signal_filter)//N_samples
+        # Normalizing data
+        norm_montage_data = scaler.fit_transform(signal_filter.reshape(-1,1)).reshape(1,-1)[0]
+    
+        for i in range(N_div):
+            montage_array = norm_montage_data[i*N_samples:(i+1)*N_samples]
+            whole_mont[j].append(montage_array)
+
 
 labels = []
 for i,_id in enumerate(ids):
@@ -105,36 +103,92 @@ for i,_id in enumerate(ids):
         for num in range(N_div):
             labels.append([0])
 labels = np.reshape(labels, (1,-1))[0]
-
-# select top 10 features using mutual_info_classif
-
-features_names = ['a_min','a_max','a_mean','a_ll','a_std','a_kurt','a_skew','a_energy','a_ent',
-                 'b_min','b_max','b_mean','b_ll','b_std','b_kurt','b_skew','b_energy','b_ent',
-                 'c_min','c_max','c_mean','c_ll','c_std','c_kurt','c_skew','c_energy','c_ent']
-
-mutual_info = mutual_info_classif(features, labels)
-mutual_info = pd.Series(mutual_info)
-mutual_info.index = features_names
-print(mutual_info.sort_values(ascending=False))
 """
-selector = SelectKBest(mutual_info_classif, k=5)
-features = selector.fit_transform(features, labels)
+print("Sinais divididos")
+oversample = SMOTE()
+undersample = RandomUnderSampler()
+
+mont1_signal, labels1 = undersample.fit_resample(whole_mont[0],labels)
+mont2_signal, labels2 = undersample.fit_resample(whole_mont[1],labels)
+mont3_signal, labels3 = undersample.fit_resample(whole_mont[2],labels)
+
+whole_mont_sampled = [mont1_signal,mont2_signal,mont3_signal]
 """
+whole_mont_sampled = whole_mont
+
+print("Sinais resampled")
+
+scales = range(1,128)
+waveletname = 'morl'
+train_size = len(labels)
+
+train_data_cwt = np.ndarray(shape=(train_size, 127, 127, 3))
+
+print("Gerando CWT...")
+for i in range(0,train_size):
+    for j in range(len(whole_mont_sampled)):
+        signal = whole_mont_sampled[j][i]
+        coeff, freq = pywt.cwt(signal, scales, waveletname, 1)
+        coeff_ = coeff[:,:127]
+        train_data_cwt[i, :, :, j] = coeff_
+        
+size_train = round(0.9*len(labels))
+x_train = train_data_cwt[:train_size,:,:,:]
+x_test = train_data_cwt[train_size:,:,:,:]
+y_train = labels[:train_size]
+y_test = labels[train_size:]
+
+print("CWT gerados...")
+
+img_x = 127
+img_y = 127
+img_z = 3
+input_shape = (img_x, img_y, img_z)
+ 
+batch_size = 16
+epochs = 10
+num_classes = 2
+ 
+x_train = x_train.astype('float32')
+x_test = x_test.astype('float32')
+ 
+y_train = keras.utils.np_utils.to_categorical(y_train, num_classes)
+y_test = keras.utils.np_utils.to_categorical(y_test, num_classes)
+print("Adicionado ao modelo...")
 
 
-# fix class imbalance issue with SMOTE
-smote = SMOTE()
-features, labels = smote.fit_resample(features, labels)
+model = Sequential()
+model.add(Conv2D(32, kernel_size=(5, 5), strides=(1, 1),
+                 activation='relu',
+                 input_shape=input_shape))
+model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+model.add(Conv2D(64, (5, 5), activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Flatten())
+model.add(Dense(1000, activation='relu'))
+model.add(Dense(num_classes,activation='softmax'))
 
-rf_classifier = rf = RandomForestClassifier(
-                    n_estimators=300,  # Number of trees in the forest
-                    max_features="sqrt",  # Number of features to consider at each split
-                    max_depth=10,  # Maximum depth of each tree
-                    min_samples_leaf=1,  # Minimum number of samples required to be at a leaf node
-                    )
-
-rf_classifier.fit(features, labels)
+print("Compilando modelo...")
+model.compile(loss=keras.losses.categorical_crossentropy,
+              optimizer='adam',
+              metrics=['accuracy'])
+ 
+print("Dando fit...")
+model.fit(x_train, y_train,
+          batch_size=batch_size,
+          epochs=epochs,
+          verbose=1,
+          validation_data=(x_test, y_test),
+          callbacks=[history])
 
 # Speichere Modell
-joblib.dump(rf_classifier, 'model.joblib') 
+joblib.dump(model, 'model.joblib') 
+
+print("Calculando resultados...")
+train_score = model.evaluate(x_train, y_train, verbose=0)
+print('Train loss: {}, Train accuracy: {}'.format(train_score[0], train_score[1]))
+test_score = model.evaluate(x_test, y_test, verbose=0)
+print('Test loss: {}, Test accuracy: {}'.format(test_score[0], test_score[1]))
+
+
 

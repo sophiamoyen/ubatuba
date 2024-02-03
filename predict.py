@@ -1,12 +1,21 @@
 # -*- coding: utf-8 -*-
 """
+-----------------------------------------------------------------------
+Script to test automatic detection of onset of seizures on EEG datasets using 
+non-overlapping Sliding Windows (Epochs) and Convolutional Neural Network (CNN)
 
-Skript testet das vortrainierte Modell
-
-
-@author:  Maurice Rohr, Dirk Schweickard
+Authors:
+Emanuel Iwanow de Araujo
+Sophia Bianchi Moyen
+Michael Stivaktakis
+-----------------------------------------------------------------------
 """
 
+"""
+--------------------------------------------------------
+Importing libraries and functions
+--------------------------------------------------------
+"""
 
 import numpy as np
 import json
@@ -18,17 +27,23 @@ from wettbewerb import get_3montages
 import mne
 from scipy import signal as sig
 import ruptures as rpt
-import pywt
-from sklearn.model_selection import KFold
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
-import joblib
+
+
+import torch
+from torch import nn, optim
+from torch.utils.data import Dataset, DataLoader, random_split
+from sklearn.metrics import f1_score
 from sklearn.preprocessing import StandardScaler
+from wettbewerb import load_references, get_3montages, get_6montages
+import mne
+from scipy import signal as sig
+from imblearn.under_sampling import RandomUnderSampler
+from model_cnn import CNN
 
 
 
 ###Signatur der Methode (Parameter und Anzahl return-Werte) darf nicht verändert werden
-def predict_labels(channels : List[str], data : np.ndarray, fs : float, reference_system: str, model_name : str='model.joblib') -> Dict[str,Any]:
+def predict_labels(channels : List[str], data : np.ndarray, fs : float, reference_system: str, model_name : str='model_cnn.pt') -> Dict[str,Any]:
     '''
     Parameters
     ----------
@@ -53,79 +68,111 @@ def predict_labels(channels : List[str], data : np.ndarray, fs : float, referenc
 # Euer Code ab hier  
 
     # Initialisiere Return (Ergebnisse)
-    seizure_present = [0] # gibt an ob ein Anfall vorliegt
-    seizure_confidence = 0.5 # gibt die Unsicherheit des Modells an (optional)
-    onset = 4.5   # gibt den Beginn des Anfalls an (in Sekunden)
-    onset_confidence = 0.99 # gibt die Unsicherheit bezüglich des Beginns an (optional)
-    offset = 999999  # gibt das Ende des Anfalls an (optional)
-    offset_confidence = 0   # gibt die Unsicherheit bezüglich des Endes an (optional)
-    '''
-    # Hier könnt ihr euer vortrainiertes Modell laden (Kann auch aus verschiedenen Dateien bestehen)
-    with open(model_name, 'rb') as f:  
-        parameters = json.load(f)         # Lade simples Model (1 Parameter)
-    '''
-    rf_classifier = joblib.load(model_name)
+    seizure_present = [0]       # gibt an ob ein Anfall vorliegt
+    seizure_confidence = 0.5    # gibt die Unsicherheit des Modells an (optional)
+    onset = 4.2                 # gibt den Beginn des Anfalls an (in Sekunden)
+    onset_confidence = 0.99     # gibt die Unsicherheit bezüglich des Beginns an (optional)
+    offset = 999999             # gibt das Ende des Anfalls an (optional)
+    offset_confidence = 0       # gibt die Unsicherheit bezüglich des Endes an (optional)
+
     
-    N_samples = 2000 # Numeber of samples per division
-    # Decompose the wave
-    wavelet = 'db4'
-    scaler = StandardScaler()
-    normalization = True
-    features = []
-    montage, montage_data, is_missing = get_3montages(channels, data)
-    N_div = len(montage_data[0])//N_samples
+    # Initialize and load the model
+    cnn_classifier = CNN(num_classes=2, seq_length=2000)
+    A = torch.load(model_name)
+    cnn_classifier.load_state_dict(A)
+    cnn_classifier.eval()
+
+    """
+    ---------------------------------------------------------------------
+    Parameters
+    ---------------------------------------------------------------------
+    """
+    N_samples = 2000          # Number of samples per division for the sliding windows (Epochs)
+    scaler = StandardScaler() # Scaler chosen for normalization of signal
+
+    # Create an array of signal for each of the 3 montages
+    mont1_signal = []
+    mont2_signal = []
+    mont3_signal = []
+    whole_mont = [mont1_signal,mont2_signal,mont3_signal] # Array with all montages
+    
+    
+    # Getting the montages
+    _montage, _montage_data, _is_missing = get_3montages(channels, data)
     _fs = fs
     
-    """
-    # Notch Filter
-    montage_data[0] = mne.filter.notch_filter(x=montage_data[0], Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
-    montage_data[1] = mne.filter.notch_filter(x=montage_data[1], Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
-    montage_data[2] = mne.filter.notch_filter(x=montage_data[2], Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
-    # Noise Filter
-    montage_data[0] = mne.filter.filter_data(data=montage_data[0], sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
-    montage_data[1] = mne.filter.filter_data(data=montage_data[1], sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
-    montage_data[2] = mne.filter.filter_data(data=montage_data[0], sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
-    """
-    # Normalizing data
-    if normalization:
-        norm_montage0_data = scaler.fit_transform(montage_data[0].reshape(-1,1)).reshape(1,-1)[0]
-        norm_montage1_data = scaler.fit_transform(montage_data[1].reshape(-1,1)).reshape(1,-1)[0]
-        norm_montage2_data = scaler.fit_transform(montage_data[2].reshape(-1,1)).reshape(1,-1)[0]
-    else:
-        norm_montage0_data = montage_data[0]
-        norm_montage1_data = montage_data[1]
-        norm_montage2_data = montage_data[2]
+    for j, signal_name in enumerate(_montage):
+            # Get signal from montage
+            signal = _montage_data[j]
+            
+            """
+            -------------------- Pre-Processing ---------------------------
+            """
+            # Notch-Filter to compensate net frequency of 50 Hz
+            signal_notch = mne.filter.notch_filter(x=signal, Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
+            # Bandpassfilter between 0.5Hz and 70Hz to filter out noise
+            signal_filter = mne.filter.filter_data(data=signal_notch, sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
+            # Defining number of divisions for signal
+            N_div = len(signal_filter)//N_samples
+            # Normalizing data
+            norm_montage_data = scaler.fit_transform(signal_filter.reshape(-1,1)).reshape(1,-1)[0]
     
-    for i in range(N_div):
-        features_per_div = np.zeros((15))
-        montage0_array = norm_montage0_data[i*N_samples:(i+1)*N_samples]
-        montage1_array = norm_montage1_data[i*N_samples:(i+1)*N_samples]
-        montage2_array = norm_montage2_data[i*N_samples:(i+1)*N_samples]
-        ca4, cd4, cd3, cd2, cd1 = pywt.wavedec(montage0_array, wavelet, level=4)
-        montage0_dwt = [ca4, cd4, cd3, cd2, cd1]
-        ca4, cd4, cd3, cd2, cd1 = pywt.wavedec(montage1_array, wavelet, level=4)
-        montage1_dwt = [ca4, cd4, cd3, cd2, cd1]
-        ca4, cd4, cd3, cd2, cd1 = pywt.wavedec(montage2_array, wavelet, level=4)
-        montage2_dwt = [ca4, cd4, cd3, cd2, cd1]
-        for w in range(len(montage0_dwt)):
-            features_per_div[w] = np.sum(np.abs(np.diff(montage0_dwt[w])))/len(montage0_dwt[w]) 
-            features_per_div[5+w] = np.sum(np.abs(np.diff(montage1_dwt[w])))/len(montage1_dwt[w])
-            features_per_div[10+w] = np.sum(np.abs(np.diff(montage2_dwt[w])))/len(montage2_dwt[w])
-        features.append(features_per_div)
+            for i in range(N_div):
+                # Add Epochs per array
+                montage_array = norm_montage_data[i*N_samples:(i+1)*N_samples]
+                whole_mont[j].append(montage_array)
         
-        
-    seizure_present_array = np.zeros(len(features),dtype=bool)
-    for f in range(len(features)):
-        seizure_present_array[f] = rf_classifier.predict(features[f].reshape(1, -1))
     
-    for s in range(len(seizure_present_array)):
-        if seizure_present_array[s] == 1:
-            #print("Epilepsia detectada")
-            if seizure_present == [0]:
-                onset = N_samples*s/fs
+    # Renaming it
+    whole_mont_resampled_np = np.array(whole_mont)
+
+    # Konvertieren der Daten in PyTorch Tensoren und Vorbereiten für das Modell
+    data_tensor = torch.tensor(whole_mont_resampled_np, dtype=torch.float).permute(1, 0, 2)  # Permutieren zu [Anzahl der Beispiele, Kanäle, Länge]
+
+    # Stellen Sie sicher, dass Ihr Modell und Daten auf dem gleichen Gerät sind
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cnn_classifier = cnn_classifier.to(device)
+    data_tensor = data_tensor.to(device)
+
+    # Bereiten Sie die Struktur für die Erfassung der Vorhersagen vor
+    seizure_present_array = np.zeros(data_tensor.shape[0], dtype=bool)
+
+    # Vorhersagen durchführen und überprüfen, ob ein Anfall vorhanden ist
+    with torch.no_grad():
+        predictions_classifier = cnn_classifier(data_tensor)  # Vorhersagen für das gesamte Batch
+        predicted_classes = torch.argmax(predictions_classifier, dim=1)
+        
+        seizure_indices = torch.where(predicted_classes == 1)[0]  # Angenommen, Klasse 1 steht für "seizure"
+
+        # Aktualisieren des seizure_present_array basierend auf den gefundenen Anfall-Indizes
+        seizure_present_array[seizure_indices] = True
+
+        # Überprüfen, ob mindestens ein Anfall im Batch vorhergesagt wurde
+        if seizure_present_array.any():
             seizure_present = [1]
+            # Der erste und der letzte Index in seizure_indices repräsentieren den Beginn und das Ende des Anfalls
+            first_seizure_index = seizure_indices[0].item()
+            last_seizure_index = seizure_indices[-1].item()
+
+            # Berechnung des Anfallsbeginns in Sekunden
+            onset = N_samples * first_seizure_index / fs
+            # Berechnung des Anfallsendes in Sekunden
+            offset = N_samples * last_seizure_index / fs
+
+            # Annahme: Confidence-Werte sind statisch, könnten dynamisch angepasst werden
+            seizure_confidence = 0.8  # Beispielwert, anpassen basierend auf Ihrer Modellausgabe oder Heuristik
+            offset_confidence = 0.8  # Beispielwert, anpassen basierend auf Analyse
+        else:
+            # Falls kein Anfall vorhergesagt wurde, setzen Sie Standardwerte
+            seizure_present = [0]
+            onset = 0  # Kein Anfall, daher kein Beginn
+            offset = 0  # Kein Anfall, daher kein Ende
+            seizure_confidence = 0  # Kein Anfall, daher keine Confidence
+            offset_confidence = 0  # Kein Anfall, daher keine Confidence
     
 
+     
+    
 #------------------------------------------------------------------------------  
     prediction = {"seizure_present":seizure_present,"seizure_confidence":seizure_confidence,
                    "onset":onset,"onset_confidence":onset_confidence,"offset":offset,

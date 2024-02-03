@@ -8,8 +8,8 @@ Skript testet das vortrainierte Modell
 @author: Maurice Rohr
 """
 
-
 from predict import predict_labels
+#from predict import predict_labels
 from wettbewerb import EEGDataset, save_predictions
 import argparse
 import time
@@ -17,7 +17,7 @@ import time
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Predict given Model')
     parser.add_argument('--test_dir', action='store',type=str,default='../test/')
-    parser.add_argument('--model_name', action='store',type=str,default='model.joblib')
+    parser.add_argument('--model_name', action='store',type=str,default='model1.joblib')
     parser.add_argument('--allow_fail',action='store_true',default=True)
     args = parser.parse_args()
     
@@ -31,6 +31,7 @@ if __name__ == '__main__':
     # Rufe Predict Methode für jedes Element (Aufnahme) aus dem Datensatz auf
     for item in dataset:
         id,channels,data,fs,ref_system,eeg_label = item
+        print("id",id)
         try:
             _prediction = predict_labels(channels,data,fs,ref_system,model_name=args.model_name)
             _prediction["id"] = id

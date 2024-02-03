@@ -1,65 +1,171 @@
+# -*- coding: utf-8 -*-
+"""
+
+Skript testet das vortrainierte Modell
+
+
+@author:  Maurice Rohr, Dirk Schweickard
+"""
+
+
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+import json
+import os
+from typing import List, Tuple, Dict, Any
 from wettbewerb import get_3montages
 
-# EEGNet Modelldefinition
-class EEGNet(nn.Module):
-    def __init__(self, num_channels=3, time_steps=400):
-        super(EEGNet, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=num_channels, out_channels=32, kernel_size=3, stride=1, padding=1)
-        self.conv2 = nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=1)
-        self.pool = nn.MaxPool1d(kernel_size=2, stride=2, padding=0)
-        reduced_size = time_steps // 4
-        self.fc1 = nn.Linear(64 * reduced_size, 128)
-        self.fc2 = nn.Linear(128, 1)
+# Pakete aus dem Vorlesungsbeispiel
+import mne
+from scipy import signal as sig
+import ruptures as rpt
 
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(x.size(0), -1)
-        x = F.relu(self.fc1(x))
-        x = torch.sigmoid(self.fc2(x))
-        return x
+import numpy as np
+import torch
+from torch import nn, optim
+from torch.utils.data import Dataset, DataLoader, random_split
+from sklearn.metrics import f1_score
+from sklearn.preprocessing import StandardScaler
+from wettbewerb import load_references, get_3montages, get_6montages
+import mne
+from scipy import signal as sig
+from imblearn.under_sampling import RandomUnderSampler
+from model_cnn import CNN
 
 ###Signatur der Methode (Parameter und Anzahl return-Werte) darf nicht verändert werden
-def predict_labels(channels, data, fs, reference_system, model_name='model.json'):
+def predict_labels(channels : List[str], data : np.ndarray, fs : float, reference_system: str, model_name : str='checkpoint2.pt') -> Dict[str,Any]:
     '''
-    ... [Dokumentation und Parameter]
+    Parameters
+    ----------
+    channels : List[str]
+        Namen der übergebenen Kanäle
+    data : ndarray
+        EEG-Signale der angegebenen Kanäle
+    fs : float
+        Sampling-Frequenz der Signale.
+    reference_system :  str
+        Welches Referenzsystem wurde benutzt, "Bezugselektrode", nicht garantiert korrekt!
+    model_name : str
+        Name eures Models,das ihr beispielsweise bei Abgabe genannt habt. 
+        Kann verwendet werden um korrektes Model aus Ordner zu laden
+    Returns
+    -------
+    prediction : Dict[str,Any]
+        enthält Vorhersage, ob Anfall vorhanden und wenn ja wo (Onset+Offset)
     '''
 
+#------------------------------------------------------------------------------
+# Euer Code ab hier  
+
     # Initialisiere Return (Ergebnisse)
-    seizure_present = True # gibt an ob ein Anfall vorliegt
+    seizure_present = [0] # gibt an ob ein Anfall vorliegt
     seizure_confidence = 0.5 # gibt die Unsicherheit des Modells an (optional)
     onset = 4.2   # gibt den Beginn des Anfalls an (in Sekunden)
     onset_confidence = 0.99 # gibt die Unsicherheit bezüglich des Beginns an (optional)
     offset = 999999  # gibt das Ende des Anfalls an (optional)
     offset_confidence = 0   # gibt die Unsicherheit bezüglich des Endes an (optional)
+
     
-    # Laden des trainierten Modells
-    model = EEGNet(num_channels=3, time_steps=400)  # Anpassen der Parameter entsprechend
-    model.load_state_dict(torch.load(model_name))
-    model.eval()
+    cnn_classifier = CNN(num_classes=2, seq_length=2000)
+    A = torch.load(model_name)
+    cnn_classifier.load_state_dict(A)
+    cnn_classifier.eval()
 
-    # Konvertieren der Eingabedaten in das richtige Format
-    montages, montage_data, _ = get_3montages(channels, data)
-    inputs = montage_data[:, :400] if montage_data.shape[1] > 400 else np.pad(montage_data, ((0,0), (0, 400 - montage_data.shape[1])), 'constant')
-    inputs = torch.from_numpy(inputs).float().unsqueeze(0)
+    
+    number_montages = 3
+    N_samples = 2000 # Number of samples per division
+    # Decompose the wave
+    wavelet = 'db4'
+    scaler = StandardScaler()
+    new_signal = []
+    
+    mont1_signal = []
+    mont2_signal = []
+    mont3_signal = []
+    
+    whole_mont = [mont1_signal,mont2_signal,mont3_signal]
+    
+    
+    _montage, _montage_data, _is_missing = get_3montages(channels, data)
+    
+    
+    _fs = fs
+    
+    for j, signal_name in enumerate(_montage):
+            signal = _montage_data[j]
+            # Notch-Filter to compensate net frequency of 50 Hz
+            signal_notch = mne.filter.notch_filter(x=signal, Fs=_fs, freqs=np.array([50.,100.]), n_jobs=2, verbose=False)
+            # Bandpassfilter between 0.5Hz and 70Hz to filter out noise
+            signal_filter = mne.filter.filter_data(data=signal_notch, sfreq=_fs, l_freq=0.5, h_freq=70.0, n_jobs=2, verbose=False)
+            # Defining number of divisions for signal
+            N_div = len(signal_filter)//N_samples
+            # Normalizing data
+            norm_montage_data = scaler.fit_transform(signal_filter.reshape(-1,1)).reshape(1,-1)[0]
+    
+            for i in range(N_div):
+                montage_array = norm_montage_data[i*N_samples:(i+1)*N_samples]
+                whole_mont[j].append(montage_array)
+        
+    
+    whole_mont_resampled_np = np.array(whole_mont)
 
+
+    # Konvertieren der Daten in PyTorch Tensoren und Vorbereiten für das Modell
+    data_tensor = torch.tensor(whole_mont_resampled_np, dtype=torch.float).permute(1, 0, 2)  # Permutieren zu [Anzahl der Beispiele, Kanäle, Länge]
+
+    # Stellen Sie sicher, dass Ihr Modell und Daten auf dem gleichen Gerät sind
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cnn_classifier = cnn_classifier.to(device)
+    data_tensor = data_tensor.to(device)
+
+    
+    # Bereiten Sie die Struktur für die Erfassung der Vorhersagen vor
+    seizure_present_array = np.zeros(data_tensor.shape[0], dtype=bool)
+
+    # Vorhersagen durchführen und überprüfen, ob ein Anfall vorhanden ist
     with torch.no_grad():
-        outputs = model(inputs)
-        seizure_present = outputs.item() > 0.5  # Schwellenwert für binäre Klassifikation
-        seizure_confidence = outputs.item()
+        predictions_classifier = cnn_classifier(data_tensor)  # Vorhersagen für das gesamte Batch
+        predicted_classes = torch.argmax(predictions_classifier, dim=1)
+        
+        # Manuell das erste Segment im Batch auf "kein Anfall" setzen
+        #predicted_classes[0] = 0 
+        
+        seizure_indices = torch.where(predicted_classes == 1)[0]  # Angenommen, Klasse 1 steht für "seizure"
 
-    # Zurückgeben der Vorhersagen im gleichen Format wie zuvor
-    prediction = {
-        "seizure_present": seizure_present,
-        "seizure_confidence": seizure_confidence,
-        "onset": 5.0,  # Dummy-Werte, da das Modell Onset/Offset nicht vorhersagt
-        "onset_confidence": 0.5,
-        "offset": 9999,
-        "offset_confidence": 0.5
-    }
+        # Aktualisieren des seizure_present_array basierend auf den gefundenen Anfall-Indizes
+        seizure_present_array[seizure_indices] = True
 
-    return prediction
+        # Überprüfen, ob mindestens ein Anfall im Batch vorhergesagt wurde
+        if seizure_present_array.any():
+            seizure_present = [1]
+            # Der erste und der letzte Index in seizure_indices repräsentieren den Beginn und das Ende des Anfalls
+            first_seizure_index = seizure_indices[0].item()
+            last_seizure_index = seizure_indices[-1].item()
+
+            # Berechnung des Anfallsbeginns in Sekunden
+            onset = N_samples * first_seizure_index / fs
+            # Berechnung des Anfallsendes in Sekunden
+            offset = N_samples * last_seizure_index / fs
+
+            # Annahme: Confidence-Werte sind statisch, könnten dynamisch angepasst werden
+            seizure_confidence = 0.8  # Beispielwert, anpassen basierend auf Ihrer Modellausgabe oder Heuristik
+            offset_confidence = 0.8  # Beispielwert, anpassen basierend auf Analyse
+        else:
+            # Falls kein Anfall vorhergesagt wurde, setzen Sie Standardwerte
+            seizure_present = [0]
+            onset = 0  # Kein Anfall, daher kein Beginn
+            offset = 0  # Kein Anfall, daher kein Ende
+            seizure_confidence = 0  # Kein Anfall, daher keine Confidence
+            offset_confidence = 0  # Kein Anfall, daher keine Confidence
+    
+
+     
+    
+#------------------------------------------------------------------------------  
+    prediction = {"seizure_present":seizure_present,"seizure_confidence":seizure_confidence,
+                   "onset":onset,"onset_confidence":onset_confidence,"offset":offset,
+                   "offset_confidence":offset_confidence}
+  
+    return prediction # Dictionary mit prediction - Muss unverändert bleiben!
+                               
+                               
+        
