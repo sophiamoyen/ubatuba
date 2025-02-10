@@ -2,7 +2,7 @@
 ## Team Ubatuba
 
 This repository contains a compilation of code developed for automatic detection of onset of seizures from EEG signals.
-Several techniques were tested and stored in each folder. The best one until now was using sliding windows (Epochs) and a CNN for classification using `pytorch`, which is the one corresponding to the `train.py`and `predict.py`in the main folder.
+Several techniques were tested and stored in each folder. The best one until now was using sliding windows (Epochs) and a CNN for classification using `pytorch`, which is the one corresponding to the `train.py`and `predict.py`in the main folder. For more information, please check out [our paper](Ubatuba_Report_WKIM2324.pdf)
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/fea3472c-1f12-4957-a785-62ef88832ca7" width="30%">
