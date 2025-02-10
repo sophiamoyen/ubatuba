@@ -4,6 +4,20 @@
 This repository contains a compilation of code developed for automatic detection of onset of seizures from EEG signals.
 Several techniques were tested and stored in each folder. The best one until now was using sliding windows (Epochs) and a CNN for classification using `pytorch`, which is the one corresponding to the `train.py`and `predict.py`in the main folder.
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/fea3472c-1f12-4957-a785-62ef88832ca7" width="30%">
+  <img src="https://github.com/user-attachments/assets/d9cccfda-9a07-4e48-9f50-3003f7042598" width="65%">
+</p>
+
+
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/997922c4-0921-49ca-864e-615dfcf77443" width="45%">
+  <img src="https://github.com/user-attachments/assets/5371ae05-17f1-4fee-898a-ace7a3110b37" width="45%">
+</p>
+
+
+
 Other methods used were:
 
 - `9_Features`: Prediction of seizure using 9 statistical features were extracted from the raw signal from 3 or 6 montages (Mean, Minimum, Maximum, Skewness, Kurtosis, Standard Deviation, Spectral Entropy and Line Length), based on (Siddiqui et. al., 2019 [1]). Then the best features are selected using Mutual Information Gain and fed to a XGBoost Classifier.
